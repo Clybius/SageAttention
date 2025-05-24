@@ -67,7 +67,42 @@ def get_nvcc_cuda_version(cuda_dir: str) -> Version:
     return nvcc_cuda_version
 
 # Iterate over all GPUs on the current machine. Also you can modify this part to specify the architecture if you want to build for specific GPU architectures.
-compute_capabilities = set()
+def get_torch_arch_list() -> Set[str]:
+    # TORCH_CUDA_ARCH_LIST can have one or more architectures,
+    # e.g. "8.0" or "7.5,8.0,8.6+PTX". Here, the "8.6+PTX" option asks the
+    # compiler to additionally include PTX code that can be runtime-compiled
+    # and executed on the 8.6 or newer architectures. While the PTX code will
+    # not give the best performance on the newer architectures, it provides
+    # forward compatibility.
+    env_arch_list = os.environ.get("TORCH_CUDA_ARCH_LIST", None)
+    if env_arch_list is None:
+        return set()
+
+    # List are separated by ; or space.
+    torch_arch_list = set(env_arch_list.replace(" ", ";").split(";"))
+    if not torch_arch_list:
+        return set()
+
+    # Filter out the invalid architectures and print a warning.
+    valid_archs = SUPPORTED_ARCHS.union({s + "+PTX" for s in SUPPORTED_ARCHS})
+    arch_list = torch_arch_list.intersection(valid_archs)
+    # If none of the specified architectures are valid, raise an error.
+    if not arch_list:
+        raise RuntimeError(
+            "None of the CUDA architectures in `TORCH_CUDA_ARCH_LIST` env "
+            f"variable ({env_arch_list}) is supported. "
+            f"Supported CUDA architectures are: {valid_archs}.")
+    invalid_arch_list = torch_arch_list - valid_archs
+    if invalid_arch_list:
+        warnings.warn(
+            f"Unsupported CUDA architectures ({invalid_arch_list}) are "
+            "excluded from the `TORCH_CUDA_ARCH_LIST` env variable "
+            f"({env_arch_list}). Supported CUDA architectures are: "
+            f"{valid_archs}.")
+    return arch_list
+
+# First, check the TORCH_CUDA_ARCH_LIST environment variable.
+compute_capabilities = get_torch_arch_list()
 device_count = torch.cuda.device_count()
 for i in range(device_count):
     major, minor = torch.cuda.get_device_capability(i)
